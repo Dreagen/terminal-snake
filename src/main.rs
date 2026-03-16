@@ -51,7 +51,7 @@ fn main() {
                     print_game(&game);
                     game.update();
                 }
-                GameState::GameOver => print_game_over(),
+                GameState::GameOver => print_game_over(&game),
             }
             next_tick = next_tick + Duration::from_millis(100);
         }
@@ -62,21 +62,28 @@ fn main() {
 
 fn print_game(game: &Game) {
     clear_console();
+
+    move_cursor(0, game.height + 1);
+    print!("└");
+    move_cursor(0, 0);
+    print!("┌");
+    move_cursor(game.width + 1, 0);
+    print!("┐");
+    move_cursor(game.width + 1, game.height + 1);
+    print!("┘");
+
     for x in 0..game.width {
         move_cursor(x + 1, 0);
-        print!("-");
+        print!("─");
         move_cursor(x + 1, game.height + 1);
-        print!("-");
+        print!("─");
     }
     for y in 0..game.height {
         move_cursor(0, y + 1);
-        print!("|");
+        print!("│");
         move_cursor(game.width + 1, y + 1);
-        print!("|");
+        print!("│");
     }
-
-    move_cursor(game.apple.x + 1, game.apple.y + 1);
-    print!("@");
 
     move_cursor(
         game.snake.head_position.x + 1,
@@ -90,23 +97,47 @@ fn print_game(game: &Game) {
     }
 
     let mut previous_position = &game.snake.head_position;
-    game.snake.body.iter().for_each(|body_part| {
-        move_cursor(body_part.x + 1, body_part.y + 1);
-        match body_part.get_direction(&previous_position) {
-            Direction::Up | Direction::Down => print!("|"),
-            Direction::Right | Direction::Left => print!("-"),
+    for i in 0..game.snake.body.len() {
+        let point = &game.snake.body[i];
+        move_cursor(point.x + 1, point.y + 1);
+        if let Some(next) = game.snake.body.get(i + 1) {
+            match next.get_direction(&previous_position) {
+                PointDirection::Up | PointDirection::Down => print!("│"),
+                PointDirection::Right | PointDirection::Left => print!("─"),
+                PointDirection::UpRight => print!("┘"),
+                PointDirection::DownRight => print!("┐"),
+                PointDirection::UpLeft => print!("└"),
+                PointDirection::DownLeft => print!("┌"),
+            }
+            previous_position = point;
+        } else {
+            match point.get_direction(&previous_position) {
+                PointDirection::Up | PointDirection::Down => print!("│"),
+                PointDirection::Right | PointDirection::Left => print!("─"),
+                _ => unreachable!(),
+            }
         }
-        previous_position = &body_part;
-    });
+    }
+
+    move_cursor(game.apple.x + 1, game.apple.y + 1);
+    print!("@");
 
     move_cursor(0, game.height + 2);
     std::io::stdout().flush().unwrap();
 }
 
-fn print_game_over() {
-    clear_console();
-    println!("Game Over - press r to restart, q to quit");
+fn print_game_over(game: &Game) {
+    print_game(game);
+    print_centered("Game Over!", game.width, game.height, -1);
+    print_centered("r to restart", game.width, game.height, 0);
+    print_centered("q to quit", game.width, game.height, 1);
+    move_cursor(0, game.height + 2);
     std::io::stdout().flush().unwrap();
+}
+
+fn print_centered(value: &str, width: isize, height: isize, y_index: isize) {
+    move_cursor(width / 2 - (value.len() as isize / 2), height / 2 + y_index);
+    println!("{}", value);
 }
 
 fn move_cursor(x: isize, y: isize) {
@@ -288,16 +319,36 @@ enum Direction {
     Left,
 }
 
+enum PointDirection {
+    Up,
+    Right,
+    Down,
+    Left,
+
+    UpRight,
+    UpLeft,
+    DownRight,
+    DownLeft,
+}
+
 impl Point {
-    fn get_direction(&self, to: &Point) -> Direction {
-        if to.y < self.y {
-            return Direction::Up;
-        } else if to.y > self.y {
-            return Direction::Down;
-        } else if to.x < self.x {
-            return Direction::Left;
+    fn get_direction(&self, to: &Point) -> PointDirection {
+        if to.y < self.y && to.x == self.x {
+            return PointDirection::Up;
+        } else if to.y < self.y && to.x > self.x {
+            return PointDirection::UpRight;
+        } else if to.y < self.y && to.x < self.x {
+            return PointDirection::UpLeft;
+        } else if to.y > self.y && to.x > self.x {
+            return PointDirection::DownRight;
+        } else if to.y > self.y && to.x < self.x {
+            return PointDirection::DownLeft;
+        } else if to.y > self.y && to.x == self.x {
+            return PointDirection::Down;
+        } else if to.x < self.x && to.y == self.y {
+            return PointDirection::Left;
         } else {
-            return Direction::Right;
+            return PointDirection::Right;
         }
     }
 }
