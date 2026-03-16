@@ -11,30 +11,33 @@ use crossterm::{
 use rand::RngExt;
 
 fn main() {
-    terminal::enable_raw_mode().unwrap();
-    let mut game = Game {
-        state: GameState::NotStarted,
-        width: 40,
-        height: 20,
-        apple: Point { x: 21, y: 9 },
-        snake: Snake {
-            head_position: Point { x: 20, y: 10 },
-            direction: Direction::Right,
-            body: VecDeque::from_iter(vec![Point { x: 19, y: 10 }]),
-        },
-    };
+    const WIDTH: isize = 40;
+    const HEIGHT: isize = 20;
 
+    terminal::enable_raw_mode().unwrap();
+    let mut game = Game::new_game(WIDTH, HEIGHT);
     let mut next_tick = Instant::now();
     loop {
         if let Ok(true) = poll(next_tick - Instant::now()) {
             if let Ok(Event::Key(key)) = read() {
                 match key.code {
-                    crossterm::event::KeyCode::Up => game.snake.change_direction(Direction::Up),
-                    crossterm::event::KeyCode::Right => {
-                        game.snake.change_direction(Direction::Right)
+                    crossterm::event::KeyCode::Up => {
+                        game.snake.set_incoming_direction(Direction::Up)
                     }
-                    crossterm::event::KeyCode::Down => game.snake.change_direction(Direction::Down),
-                    crossterm::event::KeyCode::Left => game.snake.change_direction(Direction::Left),
+                    crossterm::event::KeyCode::Right => {
+                        game.snake.set_incoming_direction(Direction::Right)
+                    }
+                    crossterm::event::KeyCode::Down => {
+                        game.snake.set_incoming_direction(Direction::Down)
+                    }
+                    crossterm::event::KeyCode::Left => {
+                        game.snake.set_incoming_direction(Direction::Left)
+                    }
+                    crossterm::event::KeyCode::Char('r') => {
+                        if game.state == GameState::GameOver {
+                            game = Game::new_game(WIDTH, HEIGHT)
+                        }
+                    }
                     crossterm::event::KeyCode::Char('q') => {
                         break;
                     }
@@ -43,9 +46,14 @@ fn main() {
             }
         }
         if next_tick <= Instant::now() {
-            print_game(&game);
-            game.tick();
-            next_tick = next_tick + Duration::from_millis(50);
+            match game.state {
+                GameState::Running => {
+                    print_game(&game);
+                    game.update();
+                }
+                GameState::GameOver => print_game_over(),
+            }
+            next_tick = next_tick + Duration::from_millis(100);
         }
     }
 
@@ -92,7 +100,13 @@ fn print_game(game: &Game) {
     });
 
     move_cursor(0, game.height + 2);
-    std::io::stdout().flush().unwrap(); // Make sure the text appears immediately
+    std::io::stdout().flush().unwrap();
+}
+
+fn print_game_over() {
+    clear_console();
+    println!("Game Over - press r to restart, q to quit");
+    std::io::stdout().flush().unwrap();
 }
 
 fn move_cursor(x: isize, y: isize) {
@@ -104,23 +118,83 @@ fn clear_console() {
 }
 
 impl Game {
-    fn tick(&mut self) {
-        let apple_eaten = self.snake.move_forward(&self.apple);
+    fn new_game(width: isize, height: isize) -> Game {
+        let mut game = Game {
+            state: GameState::Running,
+            width: width,
+            height: height,
+            apple: Point { x: 0, y: 0 },
+            snake: Snake {
+                head_position: Point {
+                    x: width / 2,
+                    y: height / 2,
+                },
+                direction: Direction::Right,
+                next_direction: None,
+                body: VecDeque::from_iter(vec![
+                    Point {
+                        x: (width / 2) - 1,
+                        y: (height / 2),
+                    },
+                    Point {
+                        x: (width / 2) - 2,
+                        y: (height / 2),
+                    },
+                ]),
+            },
+        };
+
+        game.apple = game.find_empty_position();
+
+        game
+    }
+
+    fn update(&mut self) {
+        if self.state != GameState::Running {
+            return;
+        }
+
+        let apple_eaten = self.snake.update(&self.apple);
         if apple_eaten {
-            self.apple = find_empty_position(self);
+            self.apple = self.find_empty_position();
+        }
+
+        if self.is_game_over() {
+            self.state = GameState::GameOver;
         }
     }
-}
 
-fn find_empty_position(game: &Game) -> Point {
-    let mut rng = rand::rng();
-    let random_x = rng.random_range(..game.width as u64) as isize;
-    let random_y = rng.random_range(..game.height as u64) as isize;
+    fn find_empty_position(&self) -> Point {
+        let mut rng = rand::rng();
+        let random_x = rng.random_range(..self.width as u64) as isize;
+        let random_y = rng.random_range(..self.height as u64) as isize;
 
-    return Point {
-        x: random_x,
-        y: random_y,
-    };
+        return Point {
+            x: random_x,
+            y: random_y,
+        };
+    }
+
+    fn is_game_over(&self) -> bool {
+        if self.snake.head_position.x >= self.width
+            || self.snake.head_position.x < 0
+            || self.snake.head_position.y >= self.height
+            || self.snake.head_position.y < 0
+        {
+            return true;
+        }
+
+        if self
+            .snake
+            .body
+            .iter()
+            .any(|body_part| body_part == &self.snake.head_position)
+        {
+            return true;
+        }
+
+        false
+    }
 }
 
 struct Game {
@@ -131,13 +205,18 @@ struct Game {
     height: isize,
 }
 
+#[derive(PartialEq)]
 enum GameState {
-    NotStarted,
     Running,
-    Dead,
+    GameOver,
 }
 
 impl Snake {
+    fn update(&mut self, apple: &Point) -> bool {
+        self.change_direction();
+        self.move_forward(apple)
+    }
+
     fn move_forward(&mut self, apple: &Point) -> bool {
         let head_position_clone = self.head_position.clone();
 
@@ -178,17 +257,27 @@ impl Snake {
         false
     }
 
-    fn change_direction(&mut self, direction: Direction) {
-        self.direction = direction;
+    fn set_incoming_direction(&mut self, direction: Direction) {
+        match (&direction, &self.direction) {
+            (Direction::Up, Direction::Down)
+            | (Direction::Down, Direction::Up)
+            | (Direction::Left, Direction::Right)
+            | (Direction::Right, Direction::Left) => {}
+            _ => self.next_direction = Some(direction),
+        }
     }
 
-    fn grow(&mut self) {
-        todo!()
+    fn change_direction(&mut self) {
+        if let Some(next_direction) = self.next_direction.take() {
+            self.direction = next_direction;
+        }
     }
 }
+
 struct Snake {
     head_position: Point,
     direction: Direction,
+    next_direction: Option<Direction>,
     body: VecDeque<Point>,
 }
 
