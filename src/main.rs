@@ -10,6 +10,12 @@ use crossterm::{
 };
 use rand::RngExt;
 
+const GREEN: &str = "\x1b[32m";
+const RED: &str = "\x1b[31m";
+// const YELLOW: &str = "\x1b[33m";
+// const BLUE: &str = "\x1b[34m";
+const RESET: &str = "\x1b[0m";
+
 fn main() {
     const WIDTH: isize = 40;
     const HEIGHT: isize = 20;
@@ -86,42 +92,46 @@ fn print_game(game: &Game) {
     }
 
     move_cursor(
-        game.snake.head_position.x + 1,
-        game.snake.head_position.y + 1,
+        game.snake.head_position().x + 1,
+        game.snake.head_position().y + 1,
     );
-    match game.snake.direction {
-        Direction::Up => print!("^"),
-        Direction::Right => print!(">"),
-        Direction::Down => print!("v"),
-        Direction::Left => print!("<"),
+    print!("{RED}");
+    match game.snake.direction() {
+        Direction::Up => print!("⬆"),
+        Direction::Right => print!("➡"),
+        Direction::Down => print!("⬇"),
+        Direction::Left => print!("⬅"),
     }
 
-    let mut previous_position = &game.snake.head_position;
-    for i in 0..game.snake.body.len() {
-        let point = &game.snake.body[i];
+    let mut next_direction = game.snake.direction();
+    for i in 1..game.snake.body.len() {
+        let point = &game.snake.body[i].point;
+        let current_direction = &game.snake.body[i].direction;
         move_cursor(point.x + 1, point.y + 1);
-        if let Some(next) = game.snake.body.get(i + 1) {
-            match next.get_direction(&previous_position) {
-                PointDirection::Up | PointDirection::Down => print!("│"),
-                PointDirection::Right | PointDirection::Left => print!("─"),
-                PointDirection::UpRight => print!("┘"),
-                PointDirection::DownRight => print!("┐"),
-                PointDirection::UpLeft => print!("└"),
-                PointDirection::DownLeft => print!("┌"),
-            }
-            previous_position = point;
-        } else {
-            match point.get_direction(&previous_position) {
-                PointDirection::Up | PointDirection::Down => print!("│"),
-                PointDirection::Right | PointDirection::Left => print!("─"),
-                _ => unreachable!(),
-            }
+        match (current_direction, next_direction) {
+            (Direction::Up, Direction::Up) => print!("│"),
+            (Direction::Up, Direction::Right) => print!("┌"),
+            (Direction::Up, Direction::Left) => print!("┐"),
+            (Direction::Right, Direction::Up) => print!("┘"),
+            (Direction::Right, Direction::Right) => print!("─"),
+            (Direction::Right, Direction::Down) => print!("┐"),
+            (Direction::Down, Direction::Right) => print!("└"),
+            (Direction::Down, Direction::Down) => print!("│"),
+            (Direction::Down, Direction::Left) => print!("┘"),
+            (Direction::Left, Direction::Up) => print!("└"),
+            (Direction::Left, Direction::Down) => print!("┌"),
+            (Direction::Left, Direction::Left) => print!("─"),
+            _ => unreachable!(),
         }
+
+        next_direction = current_direction;
     }
 
+    print!("{GREEN}");
     move_cursor(game.apple.x + 1, game.apple.y + 1);
     print!("@");
 
+    print!("{RESET}");
     move_cursor(0, game.height + 2);
     std::io::stdout().flush().unwrap();
 }
@@ -156,20 +166,28 @@ impl Game {
             height: height,
             apple: Point { x: 0, y: 0 },
             snake: Snake {
-                head_position: Point {
-                    x: width / 2,
-                    y: height / 2,
-                },
-                direction: Direction::Right,
                 next_direction: None,
                 body: VecDeque::from_iter(vec![
-                    Point {
-                        x: (width / 2) - 1,
-                        y: (height / 2),
+                    BodyPart {
+                        point: Point {
+                            x: (width / 2),
+                            y: (height / 2),
+                        },
+                        direction: Direction::Right,
                     },
-                    Point {
-                        x: (width / 2) - 2,
-                        y: (height / 2),
+                    BodyPart {
+                        point: Point {
+                            x: (width / 2) - 1,
+                            y: (height / 2),
+                        },
+                        direction: Direction::Right,
+                    },
+                    BodyPart {
+                        point: Point {
+                            x: (width / 2) - 2,
+                            y: (height / 2),
+                        },
+                        direction: Direction::Right,
                     },
                 ]),
             },
@@ -207,10 +225,10 @@ impl Game {
     }
 
     fn is_game_over(&self) -> bool {
-        if self.snake.head_position.x >= self.width
-            || self.snake.head_position.x < 0
-            || self.snake.head_position.y >= self.height
-            || self.snake.head_position.y < 0
+        if self.snake.head_position().x >= self.width
+            || self.snake.head_position().x < 0
+            || self.snake.head_position().y >= self.height
+            || self.snake.head_position().y < 0
         {
             return true;
         }
@@ -219,7 +237,8 @@ impl Game {
             .snake
             .body
             .iter()
-            .any(|body_part| body_part == &self.snake.head_position)
+            .skip(1)
+            .any(|body_part| &body_part.point == self.snake.head_position())
         {
             return true;
         }
@@ -244,43 +263,37 @@ enum GameState {
 
 impl Snake {
     fn update(&mut self, apple: &Point) -> bool {
-        self.change_direction();
         self.move_forward(apple)
     }
 
     fn move_forward(&mut self, apple: &Point) -> bool {
-        let head_position_clone = self.head_position.clone();
+        let direction = self
+            .next_direction
+            .take()
+            .unwrap_or_else(|| self.direction().clone());
 
-        self.body.push_front(head_position_clone);
+        let point = match direction {
+            Direction::Up => Point {
+                x: self.head_position().x,
+                y: self.head_position().y - 1,
+            },
+            Direction::Right => Point {
+                x: self.head_position().x + 1,
+                y: self.head_position().y,
+            },
+            Direction::Down => Point {
+                x: self.head_position().x,
+                y: self.head_position().y + 1,
+            },
+            Direction::Left => Point {
+                x: self.head_position().x - 1,
+                y: self.head_position().y,
+            },
+        };
 
-        match self.direction {
-            Direction::Up => {
-                self.head_position = Point {
-                    x: self.head_position.x,
-                    y: self.head_position.y - 1,
-                }
-            }
-            Direction::Right => {
-                self.head_position = Point {
-                    x: self.head_position.x + 1,
-                    y: self.head_position.y,
-                }
-            }
-            Direction::Down => {
-                self.head_position = Point {
-                    x: self.head_position.x,
-                    y: self.head_position.y + 1,
-                }
-            }
-            Direction::Left => {
-                self.head_position = Point {
-                    x: self.head_position.x - 1,
-                    y: self.head_position.y,
-                }
-            }
-        }
+        self.body.push_front(BodyPart { point, direction });
 
-        if &self.head_position == apple {
+        if &self.head_position() == &apple {
             return true;
         }
 
@@ -289,7 +302,7 @@ impl Snake {
     }
 
     fn set_incoming_direction(&mut self, direction: Direction) {
-        match (&direction, &self.direction) {
+        match (&direction, &self.direction()) {
             (Direction::Up, Direction::Down)
             | (Direction::Down, Direction::Up)
             | (Direction::Left, Direction::Right)
@@ -298,20 +311,26 @@ impl Snake {
         }
     }
 
-    fn change_direction(&mut self) {
-        if let Some(next_direction) = self.next_direction.take() {
-            self.direction = next_direction;
-        }
+    fn head_position(&self) -> &Point {
+        &self.body[0].point
+    }
+
+    fn direction(&self) -> &Direction {
+        &self.body[0].direction
     }
 }
 
 struct Snake {
-    head_position: Point,
-    direction: Direction,
     next_direction: Option<Direction>,
-    body: VecDeque<Point>,
+    body: VecDeque<BodyPart>,
 }
 
+struct BodyPart {
+    point: Point,
+    direction: Direction,
+}
+
+#[derive(Clone)]
 enum Direction {
     Up,
     Right,
