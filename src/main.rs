@@ -1,7 +1,6 @@
+use core::num;
 use std::{
-    collections::VecDeque,
-    io::Write,
-    time::{Duration, Instant},
+    collections::VecDeque, error::Error, io::Write, time::{Duration, Instant}
 };
 
 use crossterm::{
@@ -9,6 +8,7 @@ use crossterm::{
     terminal,
 };
 use rand::RngExt;
+use uuid::Uuid;
 
 const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
@@ -16,12 +16,14 @@ const RED: &str = "\x1b[31m";
 // const BLUE: &str = "\x1b[34m";
 const RESET: &str = "\x1b[0m";
 
+
 fn main() {
     const WIDTH: isize = 40;
     const HEIGHT: isize = 20;
+    let snake_id: Uuid = Uuid::new_v4();
 
     terminal::enable_raw_mode().unwrap();
-    let mut game = Game::new_game(WIDTH, HEIGHT);
+    let mut game = Game::new_game(WIDTH, HEIGHT, snake_id);
     let mut next_tick = Instant::now();
     loop {
         if let Ok(true) = poll(next_tick - Instant::now()) {
@@ -41,7 +43,7 @@ fn main() {
                     }
                     crossterm::event::KeyCode::Char('r') => {
                         if game.state == GameState::GameOver {
-                            game = Game::new_game(WIDTH, HEIGHT)
+                            game = Game::new_game(WIDTH, HEIGHT, snake_id)
                         }
                     }
                     crossterm::event::KeyCode::Char('q') => {
@@ -69,6 +71,22 @@ fn main() {
 fn print_game(game: &Game) {
     clear_console();
 
+    print_border(game);
+    print_snake(&game.snake);
+    print_apple(game);
+
+    print!("{RESET}");
+    move_cursor(0, (game.height + 2) as i32);
+    std::io::stdout().flush().unwrap();
+}
+
+fn print_apple(game: &Game) {
+    print!("{GREEN}");
+    move_cursor(game.apple.x + 1, game.apple.y + 1);
+    print!("@");
+}
+
+fn print_border(game: &Game) {
     move_cursor(0, game.height + 1);
     print!("└");
     move_cursor(0, 0);
@@ -90,23 +108,25 @@ fn print_game(game: &Game) {
         move_cursor(game.width + 1, y + 1);
         print!("│");
     }
+}
 
+fn print_snake(snake: &Snake) {
     move_cursor(
-        game.snake.head_position().x + 1,
-        game.snake.head_position().y + 1,
+        snake.head_position().x + 1,
+        snake.head_position().y + 1,
     );
     print!("{RED}");
-    match game.snake.direction() {
+    match snake.direction() {
         Direction::Up => print!("⬆"),
         Direction::Right => print!("➡"),
         Direction::Down => print!("⬇"),
         Direction::Left => print!("⬅"),
     }
 
-    let mut next_direction = game.snake.direction();
-    for i in 1..game.snake.body.len() {
-        let point = &game.snake.body[i].point;
-        let current_direction = &game.snake.body[i].direction;
+    let mut next_direction = snake.direction();
+    for i in 1..snake.body.len() {
+        let point = &snake.body[i].point;
+        let current_direction = &snake.body[i].direction;
         move_cursor(point.x + 1, point.y + 1);
         match (current_direction, next_direction) {
             (Direction::Up, Direction::Up) => print!("│"),
@@ -126,14 +146,6 @@ fn print_game(game: &Game) {
 
         next_direction = current_direction;
     }
-
-    print!("{GREEN}");
-    move_cursor(game.apple.x + 1, game.apple.y + 1);
-    print!("@");
-
-    print!("{RESET}");
-    move_cursor(0, game.height + 2);
-    std::io::stdout().flush().unwrap();
 }
 
 fn print_game_over(game: &Game) {
@@ -145,12 +157,12 @@ fn print_game_over(game: &Game) {
     std::io::stdout().flush().unwrap();
 }
 
-fn print_centered(value: &str, width: isize, height: isize, y_index: isize) {
-    move_cursor(width / 2 - (value.len() as isize / 2), height / 2 + y_index);
+fn print_centered(value: &str, width: i32, height: i32, y_index: i32) {
+    move_cursor(width / 2 - (value.len() as isize / 2) as i32, height / 2 + y_index);
     println!("{}", value);
 }
 
-fn move_cursor(x: isize, y: isize) {
+fn move_cursor(x: i32, y: i32) {
     print!("\x1B[{};{}H", y + 1, x + 1);
 }
 
@@ -159,43 +171,77 @@ fn clear_console() {
 }
 
 impl Game {
-    fn new_game(width: isize, height: isize) -> Game {
+    fn new_game(width: i32, height: i32, snake_id: Uuid) -> Game {
         let mut game = Game {
             state: GameState::Running,
             width: width,
             height: height,
             apple: Point { x: 0, y: 0 },
             snake: Snake {
-                next_direction: None,
-                body: VecDeque::from_iter(vec![
-                    BodyPart {
-                        point: Point {
-                            x: (width / 2),
-                            y: (height / 2),
+                    id: snake_id,
+                    next_direction: None,
+                    body: VecDeque::from_iter(vec![
+                        BodyPart {
+                            point: Point {
+                                x: (width / 2),
+                                y: (height / 2),
+                            },
+                            direction: Direction::Right,
                         },
-                        direction: Direction::Right,
-                    },
-                    BodyPart {
-                        point: Point {
-                            x: (width / 2) - 1,
-                            y: (height / 2),
+                        BodyPart {
+                            point: Point {
+                                x: (width / 2) - 1,
+                                y: (height / 2),
+                            },
+                            direction: Direction::Right,
                         },
-                        direction: Direction::Right,
-                    },
-                    BodyPart {
-                        point: Point {
-                            x: (width / 2) - 2,
-                            y: (height / 2),
+                        BodyPart {
+                            point: Point {
+                                x: (width / 2) - 2,
+                                y: (height / 2),
+                            },
+                            direction: Direction::Right,
                         },
-                        direction: Direction::Right,
-                    },
-                ]),
-            },
+                    ]),
+                },
+            snakes: vec![]
         };
 
         game.apple = game.find_empty_position();
 
         game
+    }
+
+    fn to_byte_array(&self) -> Vec<u8> {
+        let mut game_array = vec![0; 1024];
+
+        // game_array[]
+
+        vec![]
+    }
+
+    fn from_byte_array(input: Vec<u8>) -> Result<Game, Box<dyn Error>> {
+        let state = match input[0] {
+            0 => GameState::Running,
+            1 => GameState::GameOver,
+            invalid_state => panic!("{} not a valid state", invalid_state)
+        };
+
+        let width = i32::from_le_bytes(input[1..5].try_into().unwrap());
+        let height = i32::from_le_bytes(input[5..9].try_into().unwrap());
+
+        let apple_x = i32::from_le_bytes(input[9..13].try_into().unwrap());
+        let apple_y = i32::from_le_bytes(input[13..17].try_into().unwrap());
+
+        let number_of_snakes = i32::from_le_bytes(input[17..21].try_into().unwrap());
+
+        let snakes: Vec<Snake> = vec![];
+        for i in 0..number_of_snakes {
+
+        }
+
+
+        Err("not a valid byte array".into())
     }
 
     fn update(&mut self) {
@@ -215,8 +261,8 @@ impl Game {
 
     fn find_empty_position(&self) -> Point {
         let mut rng = rand::rng();
-        let random_x = rng.random_range(..self.width as u64) as isize;
-        let random_y = rng.random_range(..self.height as u64) as isize;
+        let random_x = rng.random_range(..self.width as u64) as i32;
+        let random_y = rng.random_range(..self.height as u64) as i32;
 
         return Point {
             x: random_x,
@@ -249,16 +295,28 @@ impl Game {
 
 struct Game {
     snake: Snake,
+    snakes: Vec<Snake>,
     apple: Point,
     state: GameState,
-    width: isize,
-    height: isize,
+    width: i32,
+    height: i32,
 }
 
 #[derive(PartialEq)]
+#[repr(u8)]
 enum GameState {
-    Running,
-    GameOver,
+    Running = 0,
+    GameOver = 1,
+}
+
+impl GameState {
+    fn from_byte(state: u8) -> Result<GameState, Box<dyn Error>> {
+        match state {
+            0 => Ok(GameState::Running),
+            1 => Ok(GameState::GameOver),
+            _ => Err("game state can only be 0 or 1".into())
+        }
+    }
 }
 
 impl Snake {
@@ -321,6 +379,7 @@ impl Snake {
 }
 
 struct Snake {
+    id: Uuid,
     next_direction: Option<Direction>,
     body: VecDeque<BodyPart>,
 }
@@ -374,6 +433,6 @@ impl Point {
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 struct Point {
-    x: isize,
-    y: isize,
+    x: i32,
+    y: i32,
 }
