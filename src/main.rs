@@ -1,4 +1,3 @@
-use core::num;
 use std::{
     collections::VecDeque, error::Error, io::Write, time::{Duration, Instant}
 };
@@ -18,9 +17,9 @@ const RESET: &str = "\x1b[0m";
 
 
 fn main() {
-    const WIDTH: isize = 40;
-    const HEIGHT: isize = 20;
-    let snake_id: Uuid = Uuid::new_v4();
+    const WIDTH: i32 = 40;
+    const HEIGHT: i32 = 20;
+    let snake_id = Uuid::new_v4();
 
     terminal::enable_raw_mode().unwrap();
     let mut game = Game::new_game(WIDTH, HEIGHT, snake_id);
@@ -204,7 +203,8 @@ impl Game {
                         },
                     ]),
                 },
-            snakes: vec![]
+            snakes: vec![],
+            player_snake_id: snake_id
         };
 
         game.apple = game.find_empty_position();
@@ -213,14 +213,28 @@ impl Game {
     }
 
     fn to_byte_array(&self) -> Vec<u8> {
-        let mut game_array = vec![0; 1024];
+        let mut bytes: Vec<u8> = vec![];
 
-        // game_array[]
+        bytes.push(self.state as u8);
 
-        vec![]
+        bytes.extend(self.width.to_le_bytes());
+        bytes.extend(self.height.to_le_bytes());
+
+        bytes.extend(self.apple.to_byte_array());
+
+        bytes.extend(self.player_snake_id.to_bytes_le());
+
+        let snakes_count: i32 = self.snakes.len().try_into().unwrap();
+        bytes.extend(snakes_count.to_le_bytes());
+
+        for snake in &self.snakes {
+            bytes.extend(snake.to_byte_array());
+        }
+
+        bytes
     }
 
-    fn from_byte_array(input: Vec<u8>) -> Result<Game, Box<dyn Error>> {
+    fn from_byte_array(input: Vec<u8>) -> Game {
         let state = match input[0] {
             0 => GameState::Running,
             1 => GameState::GameOver,
@@ -230,18 +244,35 @@ impl Game {
         let width = i32::from_le_bytes(input[1..5].try_into().unwrap());
         let height = i32::from_le_bytes(input[5..9].try_into().unwrap());
 
-        let apple_x = i32::from_le_bytes(input[9..13].try_into().unwrap());
-        let apple_y = i32::from_le_bytes(input[13..17].try_into().unwrap());
+        let apple = Point::from_byte_array(input[9..17].to_vec());
 
-        let number_of_snakes = i32::from_le_bytes(input[17..21].try_into().unwrap());
+        let player_snake_id = Uuid::from_bytes_le(input[17..33].try_into().unwrap());
+        let number_of_snakes = i32::from_le_bytes(input[33..37].try_into().unwrap());
 
-        let snakes: Vec<Snake> = vec![];
-        for i in 0..number_of_snakes {
+        let mut snakes: Vec<Snake> = vec![];
+        let mut offset: usize = 0;
+        for _ in 0..number_of_snakes {
+            let snake_length = i32::from_le_bytes(input[(37+offset)..(41+offset)].try_into().unwrap());
+            let snake_bytes = input[(41 + offset) .. (41 + offset + (snake_length as usize))].to_vec();
 
+            snakes.push(Snake::from_byte_array(snake_bytes));
+
+            offset += (snake_length + 4) as usize; // length of snake in bytes + the byte that says how long
+                                        // the snake is
         }
 
+        let snake = snakes.into_iter().find(|s| s.id == player_snake_id)
+            .expect("player snake id not present in game byte array");
 
-        Err("not a valid byte array".into())
+        Game {
+            state,
+            width,
+            height,
+            apple,
+            player_snake_id,
+            snake,
+            snakes: vec![]
+        }
     }
 
     fn update(&mut self) {
@@ -296,13 +327,14 @@ impl Game {
 struct Game {
     snake: Snake,
     snakes: Vec<Snake>,
+    player_snake_id: Uuid,
     apple: Point,
     state: GameState,
     width: i32,
     height: i32,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 #[repr(u8)]
 enum GameState {
     Running = 0,
@@ -317,6 +349,12 @@ impl GameState {
             _ => Err("game state can only be 0 or 1".into())
         }
     }
+}
+
+struct Snake {
+    id: Uuid,
+    next_direction: Option<Direction>,
+    body: VecDeque<BodyPart>,
 }
 
 impl Snake {
@@ -362,9 +400,9 @@ impl Snake {
     fn set_incoming_direction(&mut self, direction: Direction) {
         match (&direction, &self.direction()) {
             (Direction::Up, Direction::Down)
-            | (Direction::Down, Direction::Up)
-            | (Direction::Left, Direction::Right)
-            | (Direction::Right, Direction::Left) => {}
+                | (Direction::Down, Direction::Up)
+                | (Direction::Left, Direction::Right)
+                | (Direction::Right, Direction::Left) => {}
             _ => self.next_direction = Some(direction),
         }
     }
@@ -376,12 +414,46 @@ impl Snake {
     fn direction(&self) -> &Direction {
         &self.body[0].direction
     }
-}
 
-struct Snake {
-    id: Uuid,
-    next_direction: Option<Direction>,
-    body: VecDeque<BodyPart>,
+    fn from_byte_array(input: Vec<u8>) -> Snake {
+        let snake_id = Uuid::from_bytes_le(input[..16].try_into().expect("failed to get snake id from bytes"));
+        let next_direction = match input[5] {
+            0 => Direction::Up,
+            1 => Direction::Right,
+            2 => Direction::Down,
+            3 => Direction::Left,
+            invalid_state => panic!("{} not a valid state", invalid_state)
+        };
+
+        let body_part_count = i32::from_le_bytes(input[6..10].try_into().unwrap());
+
+        let mut body_parts: VecDeque<BodyPart> = VecDeque::new();
+        let mut offset: usize = 0;
+        for _ in 0..body_part_count {
+            body_parts.push_back(BodyPart::from_byte_array(input[offset..10].to_vec()));
+            offset += 10;
+        }
+
+        Snake {
+            id: snake_id,
+            next_direction: Option::Some(next_direction),
+            body: body_parts,
+        }
+    }
+
+    fn to_byte_array(&self) -> Vec<u8> {
+        let mut bytes: Vec<u8> = vec![];
+
+        bytes.extend(&self.id.to_bytes_le());
+        bytes.push(*self.direction() as u8);
+        let body_part_count: &i32 = &self.body.len().try_into().expect("body parts didn't fit into i32");
+        bytes.extend(body_part_count.to_le_bytes());
+        for part in &self.body {
+            bytes.extend(part.to_byte_array());
+        }
+
+        bytes
+    }
 }
 
 struct BodyPart {
@@ -389,7 +461,35 @@ struct BodyPart {
     direction: Direction,
 }
 
-#[derive(Clone)]
+impl BodyPart {
+    fn to_byte_array(&self) -> Vec<u8> {
+        let mut bytes: Vec<u8> = vec![];
+
+        bytes.extend(self.point.to_byte_array());
+        bytes.push(self.direction as u8);
+
+        bytes
+    }
+
+    fn from_byte_array(input: Vec<u8>) -> BodyPart {
+        let point = Point::from_byte_array(input[0..8].to_vec());
+        let direction = match input[8] {
+            0 => Direction::Up,
+            1 => Direction::Right,
+            2 => Direction::Down,
+            3 => Direction::Left,
+            invalid_state => panic!("{} not a valid state", invalid_state)
+        };
+
+        BodyPart {
+            point,
+            direction
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy)]
 enum Direction {
     Up,
     Right,
@@ -397,37 +497,24 @@ enum Direction {
     Left,
 }
 
-enum PointDirection {
-    Up,
-    Right,
-    Down,
-    Left,
-
-    UpRight,
-    UpLeft,
-    DownRight,
-    DownLeft,
-}
-
 impl Point {
-    fn get_direction(&self, to: &Point) -> PointDirection {
-        if to.y < self.y && to.x == self.x {
-            return PointDirection::Up;
-        } else if to.y < self.y && to.x > self.x {
-            return PointDirection::UpRight;
-        } else if to.y < self.y && to.x < self.x {
-            return PointDirection::UpLeft;
-        } else if to.y > self.y && to.x > self.x {
-            return PointDirection::DownRight;
-        } else if to.y > self.y && to.x < self.x {
-            return PointDirection::DownLeft;
-        } else if to.y > self.y && to.x == self.x {
-            return PointDirection::Down;
-        } else if to.x < self.x && to.y == self.y {
-            return PointDirection::Left;
-        } else {
-            return PointDirection::Right;
+    fn from_byte_array(input: Vec<u8>) -> Point {
+        let x = i32::from_le_bytes(input[0..4].try_into().unwrap());
+        let y = i32::from_le_bytes(input[0..4].try_into().unwrap());
+
+        Point {
+            x,
+            y
         }
+    }
+
+    fn to_byte_array(&self) -> Vec<u8> {
+        let mut bytes: Vec<u8> = vec![];
+
+        bytes.extend(self.x.to_le_bytes());
+        bytes.extend(self.y.to_le_bytes());
+
+        bytes
     }
 }
 
