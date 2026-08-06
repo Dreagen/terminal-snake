@@ -1,3 +1,6 @@
+pub mod config;
+pub mod udp_service;
+
 use std::{
     collections::VecDeque, io::Write, time::{Duration, Instant}
 };
@@ -9,6 +12,8 @@ use crossterm::{
 use rand::RngExt;
 use uuid::Uuid;
 
+use crate::config::Config;
+
 const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
 const RESET: &str = "\x1b[0m";
@@ -19,6 +24,9 @@ fn main() {
     const HEIGHT: i32 = 20;
 
     terminal::enable_raw_mode().unwrap();
+
+    let config = config::load();
+
     let mut game = Game::new_game(WIDTH, HEIGHT);
     let mut next_tick = Instant::now();
     loop {
@@ -53,7 +61,7 @@ fn main() {
             match game.state {
                 GameState::Running => {
                     print_game(&game);
-                    game.update();
+                    game.update(&config);
                 }
                 GameState::GameOver => print_game_over(&game),
             }
@@ -277,7 +285,7 @@ impl Game {
         }
     }
 
-    fn update(&mut self) {
+    fn update(&mut self, config: &Config) {
         if self.state != GameState::Running {
             return;
         }
@@ -294,7 +302,9 @@ impl Game {
 
         // This is unecessary just preparing for communication with server
         let byte_array = self.to_byte_array();
-        *self = Game::from_byte_array(byte_array);
+        let game_data_from_server = udp_service::send_data(&config.server_addr, &byte_array)
+            .expect("Failed to send game data to server");
+        *self = Game::from_byte_array(game_data_from_server);
     }
 
     fn find_empty_position(&self) -> Point {
